@@ -256,17 +256,22 @@ class GameState:
             return player.name if player is not None else None
 
     def _move_players(self, delta_time: float) -> None:
+        # La dirección se normaliza como vector. Así la distancia recorrida
+        # por segundo es exactamente la misma horizontal, vertical o diagonal.
+        safe_delta = max(0.0, min(float(delta_time), 0.1))
+        step_distance = PLAYER_SPEED * safe_delta
+
         for player in self.players.values():
             dx = float(player.dir_x)
             dy = float(player.dir_y)
+            magnitude = math.hypot(dx, dy)
 
-            if dx != 0.0 and dy != 0.0:
-                diagonal_factor = 1.0 / math.sqrt(2.0)
-                dx *= diagonal_factor
-                dy *= diagonal_factor
+            if magnitude > 0.0:
+                dx /= magnitude
+                dy /= magnitude
 
-            player.x += dx * PLAYER_SPEED * delta_time
-            player.y += dy * PLAYER_SPEED * delta_time
+            player.x += dx * step_distance
+            player.y += dy * step_distance
 
             player.x = min(max(player.x, PLAYER_RADIUS), MAP_SIZE - PLAYER_RADIUS)
             player.y = min(max(player.y, PLAYER_RADIUS), MAP_SIZE - PLAYER_RADIUS)

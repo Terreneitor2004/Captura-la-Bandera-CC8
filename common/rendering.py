@@ -1,4 +1,8 @@
-"""Funciones pequeñas para convertir coordenadas lógicas a pantalla."""
+"""Compatibilidad para conversión de coordenadas.
+
+Las interfaces nuevas usan ui.layout.Rect y una escala uniforme. Estas funciones
+se mantienen para cualquier módulo externo que todavía importe common.rendering.
+"""
 
 from __future__ import annotations
 
@@ -11,13 +15,18 @@ def logical_to_screen(
     width: float,
     height: float,
 ) -> tuple[float, float]:
-    """Convierte el eje Y del protocolo (crece hacia abajo) al de Arcade."""
+    """Convierte coordenadas sin deformar el mapa.
 
-    scale_x = width / MAP_SIZE
-    scale_y = height / MAP_SIZE
-    return x * scale_x, height - (y * scale_y)
+    El mapa se centra dentro del espacio disponible y usa la misma escala en
+    ambos ejes, evitando diferencias visuales de velocidad.
+    """
+
+    size = min(width, height)
+    left = (width - size) / 2
+    bottom = (height - size) / 2
+    scale = size / MAP_SIZE
+    return left + x * scale, bottom + (MAP_SIZE - y) * scale
 
 
 def logical_radius_to_screen(radius: float, width: float, height: float) -> float:
-    scale = min(width / MAP_SIZE, height / MAP_SIZE)
-    return radius * scale
+    return radius * (min(width, height) / MAP_SIZE)

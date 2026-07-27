@@ -9,6 +9,7 @@ from common.constants import (
     MAP_CENTER_X,
     MAP_CENTER_Y,
     PLAYER_RADIUS,
+    PLAYER_SPEED,
     STATE_COUNTDOWN,
     STATE_LOBBY,
     STATE_PLAYING,
@@ -55,6 +56,40 @@ class GameStateTests(unittest.TestCase):
         game.add_player("p1", "Ana")
         game.phase = STATE_PLAYING
         self.assertFalse(game.set_direction("p1", 2, 0))
+
+    def test_horizontal_and_vertical_speed_are_equal(self) -> None:
+        game = GameState()
+        player = game.add_player("p1", "Ana")
+        game.phase = STATE_PLAYING
+        player.x = 500.0
+        player.y = 500.0
+
+        game.set_direction("p1", 1, 0)
+        game.update(0.05)
+        horizontal_distance = player.x - 500.0
+
+        player.x = 500.0
+        player.y = 500.0
+        game.set_direction("p1", 0, 1)
+        game.update(0.05)
+        vertical_distance = player.y - 500.0
+
+        self.assertAlmostEqual(horizontal_distance, PLAYER_SPEED * 0.05)
+        self.assertAlmostEqual(vertical_distance, PLAYER_SPEED * 0.05)
+        self.assertAlmostEqual(horizontal_distance, vertical_distance)
+
+    def test_diagonal_speed_is_normalized(self) -> None:
+        game = GameState()
+        player = game.add_player("p1", "Ana")
+        game.phase = STATE_PLAYING
+        player.x = 500.0
+        player.y = 500.0
+
+        game.set_direction("p1", 1, 1)
+        game.update(0.05)
+        distance = math.dist((500.0, 500.0), (player.x, player.y))
+
+        self.assertAlmostEqual(distance, PLAYER_SPEED * 0.05)
 
 
 if __name__ == "__main__":

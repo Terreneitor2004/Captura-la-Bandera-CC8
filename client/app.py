@@ -1,4 +1,8 @@
-"""Interfaz gráfica Arcade del cliente CTF."""
+"""Ventana Arcade del cliente CTF.
+
+La lógica visual se encuentra en client/interface.py para mantener este archivo
+centrado en eventos, entrada del teclado y mensajes del protocolo.
+"""
 
 from __future__ import annotations
 
@@ -6,19 +10,26 @@ from typing import Any
 
 import arcade
 
-from common.constants import CIRCLE_RADIUS, MAP_CENTER_X, MAP_CENTER_Y, PLAYER_RADIUS
-from common.rendering import logical_radius_to_screen, logical_to_screen
+from client.interface import ClientInterface, ClientUIState
 from client.network import CTFClient
+from ui import theme
 
-WINDOW_SIZE = 820
+WINDOW_WIDTH = 1180
+WINDOW_HEIGHT = 760
 WINDOW_TITLE = "CTF - Cliente Python"
 
 
 class ClientWindow(arcade.Window):
     def __init__(self, client: CTFClient) -> None:
-        super().__init__(WINDOW_SIZE, WINDOW_SIZE, WINDOW_TITLE, resizable=True)
+        super().__init__(
+            WINDOW_WIDTH,
+            WINDOW_HEIGHT,
+            WINDOW_TITLE,
+            resizable=True,
+        )
         self.client = client
-        arcade.set_background_color(arcade.color.DARK_SLATE_GRAY)
+        self.interface = ClientInterface()
+        arcade.set_background_color(theme.BACKGROUND)
 
         self.player_id: str | None = None
         self.players: dict[str, dict[str, Any]] = {}
@@ -39,118 +50,20 @@ class ClientWindow(arcade.Window):
 
     def on_draw(self) -> None:
         self.clear()
-        width = self.width
-        height = self.height
-
-        circle_radius_logical = float(self.game_config.get("circle_radius", CIRCLE_RADIUS))
-        player_radius_logical = float(self.game_config.get("player_radius", PLAYER_RADIUS))
-
-        center_x, center_y = logical_to_screen(
-            MAP_CENTER_X,
-            MAP_CENTER_Y,
-            width,
-            height,
+        state = ClientUIState(
+            player_id=self.player_id,
+            player_name=self.client.name,
+            host=self.client.host,
+            port=self.client.port,
+            phase=self.phase,
+            players=self.players,
+            flag=self.flag,
+            countdown=self.countdown,
+            winner=self.winner,
+            error_message=self.error_message,
+            config=self.game_config,
         )
-        circle_radius = logical_radius_to_screen(circle_radius_logical, width, height)
-        player_radius = logical_radius_to_screen(player_radius_logical, width, height)
-
-        arcade.draw_circle_filled(
-            center_x,
-            center_y,
-            circle_radius,
-            arcade.color.DARK_BLUE_GRAY,
-        )
-        arcade.draw_circle_outline(
-            center_x,
-            center_y,
-            circle_radius,
-            arcade.color.WHITE,
-            3,
-        )
-
-        flag_x, flag_y = logical_to_screen(
-            float(self.flag.get("x", 500.0)),
-            float(self.flag.get("y", 500.0)),
-            width,
-            height,
-        )
-        arcade.draw_circle_filled(flag_x, flag_y, max(7, player_radius * 0.65), arcade.color.GOLD)
-
-        for player in self.players.values():
-            x, y = logical_to_screen(
-                float(player["x"]),
-                float(player["y"]),
-                width,
-                height,
-            )
-            is_me = player["id"] == self.player_id
-            carrying = player["id"] == self.flag.get("owner")
-
-            if carrying:
-                color = arcade.color.ORANGE
-            elif is_me:
-                color = arcade.color.LIME_GREEN
-            else:
-                color = arcade.color.SKY_BLUE
-
-            arcade.draw_circle_filled(x, y, player_radius, color)
-            arcade.draw_text(
-                player.get("name", player["id"]),
-                x,
-                y + player_radius + 5,
-                arcade.color.WHITE,
-                11,
-                anchor_x="center",
-            )
-
-        arcade.draw_text(
-            f"CLIENTE | fase: {self.phase} | jugadores: {len(self.players)}",
-            12,
-            self.height - 28,
-            arcade.color.WHITE,
-            16,
-        )
-        arcade.draw_text(
-            "Movimiento: WASD o flechas | Tomar/robar bandera: E",
-            12,
-            12,
-            arcade.color.LIGHT_GRAY,
-            12,
-        )
-
-        if self.countdown is not None:
-            arcade.draw_text(
-                str(self.countdown),
-                self.width / 2,
-                self.height / 2,
-                arcade.color.YELLOW,
-                56,
-                anchor_x="center",
-                anchor_y="center",
-            )
-
-        if self.winner is not None:
-            winner_name = self.players.get(self.winner, {}).get("name", self.winner)
-            text = "¡Ganaste!" if self.winner == self.player_id else f"Ganó {winner_name}"
-            arcade.draw_text(
-                text,
-                self.width / 2,
-                self.height / 2,
-                arcade.color.YELLOW,
-                36,
-                anchor_x="center",
-                anchor_y="center",
-            )
-
-        if self.error_message:
-            arcade.draw_text(
-                self.error_message,
-                self.width / 2,
-                42,
-                arcade.color.LIGHT_CORAL,
-                12,
-                anchor_x="center",
-            )
+        self.interface.draw(self.width, self.height, state)
 
     def on_key_press(self, symbol: int, modifiers: int) -> None:
         del modifiers
@@ -169,6 +82,13 @@ class ClientWindow(arcade.Window):
         del modifiers
         self.keys_down.discard(symbol)
         self._send_direction_if_changed()
+
+    def on_deactivate(self) -> None:
+        """Detiene el movimiento si la ventana pierde el foco."""
+
+        if self.keys_down:
+            self.keys_down.clear()
+            self._send_direction_if_changed()
 
     def on_close(self) -> None:
         self.client.close()
@@ -206,9 +126,6 @@ class ClientWindow(arcade.Window):
         elif message_type == "lobby":
             lobby_players = message.get("players", [])
 
-            # Al conectarse o al terminar una ronda, el mensaje lobby indica
-            # que debemos esperar a que el host inicie manualmente. Durante
-            # countdown/playing solo actualizamos la lista sin cambiar la fase.
             if self.phase in {"connecting", "lobby", "finished"}:
                 self.phase = "lobby"
                 self.countdown = None
@@ -255,7 +172,6 @@ class ClientWindow(arcade.Window):
 
         elif message_type == "error":
             reason = str(message.get("reason", "ERROR"))
-            # INVALID_ACTION puede aparecer al pulsar E lejos de la bandera.
             if reason != "INVALID_ACTION":
                 self.error_message = reason
 
