@@ -11,6 +11,7 @@ from typing import Any
 import arcade
 
 from client.interface import ClientInterface, ClientUIState
+from client.message_adapter import normalize_flag, normalize_players
 from client.network import CTFClient
 from ui import theme
 
@@ -124,23 +125,21 @@ class ClientWindow(arcade.Window):
             self.error_message = ""
 
         elif message_type == "lobby":
-            lobby_players = message.get("players", [])
+            lobby_players = normalize_players(message.get("players", []))
 
             if self.phase in {"connecting", "lobby", "finished"}:
                 self.phase = "lobby"
                 self.countdown = None
                 self.winner = None
 
-            for player in lobby_players:
-                player_id = player.get("id")
-                if isinstance(player_id, str):
-                    current = self.players.get(player_id, {})
-                    current.update(player)
-                    current.setdefault("x", 500.0)
-                    current.setdefault("y", 500.0)
-                    self.players[player_id] = current
+            for player_id, player in lobby_players.items():
+                current = self.players.get(player_id, {})
+                current.update(player)
+                current.setdefault("x", 500.0)
+                current.setdefault("y", 500.0)
+                self.players[player_id] = current
 
-            valid_ids = {p.get("id") for p in lobby_players}
+            valid_ids = set(lobby_players)
             self.players = {
                 player_id: player
                 for player_id, player in self.players.items()
@@ -158,13 +157,17 @@ class ClientWindow(arcade.Window):
             self.error_message = ""
 
         elif message_type == "state":
-            self.flag = message.get("flag", self.flag)
-            state_players = message.get("players", [])
-            self.players = {
-                player["id"]: player
-                for player in state_players
-                if isinstance(player, dict) and isinstance(player.get("id"), str)
-            }
+            # El estándar usa players como lista y flag.owner. Algunos proyectos
+            # de la clase envían players como diccionario indexado por ID y
+            # flag.carrier_id. Normalizamos ambos formatos para interoperar.
+            self.flag = normalize_flag(message.get("flag", self.flag), self.flag)
+            self.players = normalize_players(message.get("players", []))
+
+            # Según el protocolo, un mensaje state solo se envía durante playing.
+            # Esto también permite conectarse a servidores que omiten start.
+            if self.phase != "finished":
+                self.phase = "playing"
+                self.countdown = None
 
         elif message_type == "game_over":
             self.phase = "finished"
@@ -178,6 +181,8 @@ class ClientWindow(arcade.Window):
         elif message_type == "disconnected":
             self.phase = "disconnected"
             self.error_message = "El servidor se desconectó"
+
+
 
 
 def run_client_window(client: CTFClient) -> None:
