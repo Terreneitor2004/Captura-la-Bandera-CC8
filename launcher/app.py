@@ -25,7 +25,7 @@ class LauncherWindow(arcade.Window):
         super().__init__(WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_TITLE, resizable=True)
         arcade.set_background_color(theme.BACKGROUND)
         self.interface = LauncherInterface()
-        self.screen = "home"
+        self.menu_screen = "home"
         self.fields = {
             "server_name": TextField("Nombre del servidor", "Servidor Python Arcade", max_length=40),
             "server_port": TextField("Puerto TCP", str(DEFAULT_TCP_PORT), "8889", 5, numeric=True),
@@ -44,6 +44,8 @@ class LauncherWindow(arcade.Window):
         self.mouse_y = -1.0
         self.bounds: dict[str, Any] = {}
         self.servers: list[dict[str, Any]] = []
+        self.selected_server: int | None = None
+        self.server_offset = 0
         self.status = ""
         self.error = ""
         self.busy = False
@@ -55,9 +57,11 @@ class LauncherWindow(arcade.Window):
         self.bounds = self.interface.draw(
             self.width,
             self.height,
-            screen=self.screen,
+            screen=self.menu_screen,
             fields=self.fields,
             servers=self.servers,
+            selected_server=self.selected_server,
+            server_offset=self.server_offset,
             hovered=self.hovered,
             busy=self.busy,
             status=self.status,
@@ -78,7 +82,13 @@ class LauncherWindow(arcade.Window):
                 self.error = str(value)
             elif kind == "servers":
                 self.servers = value
-                self.status = f"Se encontraron {len(value)} servidor(es)." if value else "No se encontraron servidores."
+                self.selected_server = 0 if value else None
+                self.server_offset = 0
+                self.status = (
+                    f"Se encontraron {len(value)} servidor(es). Selecciona uno y presiona UNIRSE."
+                    if value
+                    else "No se encontraron servidores. Verifica Radmin, UDP 8888 y el firewall."
+                )
                 self.error = ""
             elif kind == "server":
                 self._open_server(value)
@@ -94,6 +104,17 @@ class LauncherWindow(arcade.Window):
             (key for key, rect in self.bounds.items() if key != "card" and rect.contains(x, y)),
             None,
         )
+
+    def on_mouse_scroll(self, x: float, y: float, scroll_x: float, scroll_y: float) -> None:
+        del scroll_x
+        list_rect = self.bounds.get("server_list")
+        if self.menu_screen != "client" or not list_rect or not list_rect.contains(x, y):
+            return
+        maximum = max(0, len(self.servers) - 4)
+        if scroll_y < 0:
+            self.server_offset = min(maximum, self.server_offset + 1)
+        elif scroll_y > 0:
+            self.server_offset = max(0, self.server_offset - 1)
 
     def on_mouse_press(self, x: float, y: float, button: int, modifiers: int) -> None:
         del button, modifiers
@@ -122,11 +143,19 @@ class LauncherWindow(arcade.Window):
             self._connect_from_form()
         elif clicked == "search":
             self._search_servers()
+        elif clicked == "join_selected":
+            self._join_selected_server()
         elif clicked and clicked.startswith("server_"):
             try:
                 index = int(clicked.split("_", 1)[1])
-                self._connect_to_server(self.servers[index])
-            except (ValueError, IndexError):
+                if 0 <= index < len(self.servers):
+                    self.selected_server = index
+                    selected = self.servers[index]
+                    self.fields["client_host"].value = str(selected.get("ip", ""))
+                    self.fields["client_port"].value = str(selected.get("tcp_port", ""))
+                    self.status = f"Seleccionado: {selected.get('name', 'Servidor CTF')}"
+                    self.error = ""
+            except ValueError:
                 pass
 
     def on_text(self, text: str) -> None:
@@ -136,7 +165,7 @@ class LauncherWindow(arcade.Window):
     def on_key_press(self, symbol: int, modifiers: int) -> None:
         del modifiers
         if symbol == arcade.key.ESCAPE:
-            if self.screen == "home":
+            if self.menu_screen == "home":
                 self.close()
             elif not self.busy:
                 self._change_screen("home")
@@ -148,15 +177,15 @@ class LauncherWindow(arcade.Window):
         elif symbol == arcade.key.TAB:
             self._cycle_field()
         elif symbol in (arcade.key.ENTER, arcade.key.RETURN):
-            if self.screen == "server":
+            if self.menu_screen == "server":
                 self._start_server()
-            elif self.screen == "client":
+            elif self.menu_screen == "client":
                 self._connect_from_form()
 
     def _field_order(self) -> list[str]:
-        if self.screen == "server":
+        if self.menu_screen == "server":
             return ["server_name", "server_port"]
-        if self.screen == "client":
+        if self.menu_screen == "client":
             return ["client_name", "client_host", "client_port"]
         return []
 
@@ -175,7 +204,7 @@ class LauncherWindow(arcade.Window):
             self._activate_field(order[(order.index(self.active_field) + 1) % len(order)])
 
     def _change_screen(self, screen: str) -> None:
-        self.screen = screen
+        self.menu_screen = screen
         self.status = ""
         self.error = ""
         self.hovered = None
@@ -213,7 +242,10 @@ class LauncherWindow(arcade.Window):
             self.error = f"El nombre debe tener entre 1 y {MAX_NAME_LENGTH} caracteres."
             return
         if not host:
-            self.error = "Escribe la IP del servidor o usa BUSCAR SERVIDORES."
+            if self.selected_server is not None:
+                self._join_selected_server()
+            else:
+                self.error = "Escribe una IP o presiona BUSCAR SERVIDORES y selecciona uno."
             return
         if port_text:
             try:
@@ -238,7 +270,26 @@ class LauncherWindow(arcade.Window):
         self._async("client", f"Consultando {host}:8888...", resolve_and_connect)
 
     def _search_servers(self) -> None:
-        self._async("servers", "Buscando servidores por UDP 8888...", discover_servers)
+        self.servers = []
+        self.selected_server = None
+        self.server_offset = 0
+        self._async(
+            "servers",
+            "Enviando broadcast UDP por el puerto 8888...",
+            discover_servers,
+        )
+
+    def _join_selected_server(self) -> None:
+        if self.selected_server is None:
+            self.error = "Selecciona un servidor de la lista."
+            return
+        try:
+            server = self.servers[self.selected_server]
+        except IndexError:
+            self.selected_server = None
+            self.error = "El servidor seleccionado ya no está disponible. Busca nuevamente."
+            return
+        self._connect_to_server(server)
 
     def _connect_to_server(self, server: dict[str, Any]) -> None:
         name = self.fields["client_name"].value.strip()

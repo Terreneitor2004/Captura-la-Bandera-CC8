@@ -24,6 +24,8 @@ class LauncherInterface:
         screen: str,
         fields: dict[str, TextField],
         servers: list[dict[str, Any]],
+        selected_server: int | None,
+        server_offset: int,
         hovered: str | None,
         busy: bool,
         status: str,
@@ -31,7 +33,7 @@ class LauncherInterface:
         cursor_visible: bool,
     ) -> dict[str, Rect]:
         self._background(width, height)
-        bounds = self._bounds(width, height, screen, len(servers))
+        bounds = self._bounds(width, height, screen, len(servers), server_offset)
         self._header(width, height, screen)
 
         if screen == "home":
@@ -39,7 +41,10 @@ class LauncherInterface:
         elif screen == "server":
             self._server(bounds, fields, hovered, busy, cursor_visible)
         else:
-            self._client(bounds, fields, servers, hovered, busy, cursor_visible)
+            self._client(
+                bounds, fields, servers, selected_server, server_offset,
+                hovered, busy, cursor_visible
+            )
 
         self._status(width, status, error, busy)
         return bounds
@@ -232,6 +237,8 @@ class LauncherInterface:
         bounds: dict[str, Rect],
         fields: dict[str, TextField],
         servers: list[dict[str, Any]],
+        selected_server: int | None,
+        server_offset: int,
         hovered: str | None,
         busy: bool,
         cursor_visible: bool,
@@ -257,10 +264,19 @@ class LauncherInterface:
             self.texts,
             "search-client",
             bounds["search"],
-            "BUSCAR SERVIDORES",
+            "BUSCAR / ACTUALIZAR",
             enabled=not busy,
             hovered=hovered == "search",
             accent=theme.PRIMARY,
+        )
+        draw_button(
+            self.texts,
+            "join-selected-client",
+            bounds["join_selected"],
+            "UNIRSE AL SELECCIONADO",
+            enabled=not busy and selected_server is not None,
+            hovered=hovered == "join_selected",
+            accent=theme.SUCCESS,
         )
         draw_button(
             self.texts,
@@ -288,7 +304,7 @@ class LauncherInterface:
         if not servers:
             self.texts.draw(
                 "servers-empty",
-                "Presiona “BUSCAR SERVIDORES” o escribe la IP de Radmin.",
+                "Presiona “BUSCAR / ACTUALIZAR” para enviar el broadcast UDP.",
                 list_rect.center_x,
                 list_rect.center_y - 4,
                 theme.TEXT_DIM,
@@ -297,10 +313,13 @@ class LauncherInterface:
             )
             return
 
-        for index, server in enumerate(servers[:4]):
+        visible = list(enumerate(servers))[server_offset : server_offset + 4]
+        for index, server in visible:
             row = bounds[f"server_{index}"]
-            row_fill = theme.PANEL_HOVER if hovered == f"server_{index}" else theme.PANEL
-            draw_panel(row, row_fill, theme.PRIMARY if hovered == f"server_{index}" else theme.BORDER_SOFT, 1)
+            selected = selected_server == index
+            row_fill = theme.PANEL_HOVER if selected or hovered == f"server_{index}" else theme.PANEL
+            border = theme.SUCCESS if selected else (theme.PRIMARY if hovered == f"server_{index}" else theme.BORDER_SOFT)
+            draw_panel(row, row_fill, border, 2 if selected else 1)
             name = str(server.get("name", "Servidor CTF"))
             ip = str(server.get("ip", "?"))
             port = server.get("tcp_port", "?")
@@ -325,15 +344,26 @@ class LauncherInterface:
             )
             self.texts.draw(
                 f"server-row-action-{index}",
-                "ENTRAR",
+                "SELECCIONADO" if selected else "SELECCIONAR",
                 row.right - 14,
                 row.center_y,
-                theme.PRIMARY,
+                theme.SUCCESS if selected else theme.PRIMARY,
                 9,
                 anchor_x="right",
                 anchor_y="center",
                 bold=True,
             )
+
+        shown_from = server_offset + 1
+        shown_to = min(len(servers), server_offset + 4)
+        self.texts.draw(
+            "servers-scroll-hint",
+            f"Mostrando {shown_from}-{shown_to} de {len(servers)}  •  Usa la rueda del mouse para desplazarte",
+            list_rect.left + 16,
+            list_rect.bottom + 10,
+            theme.TEXT_DIM,
+            8,
+        )
 
     def _section_title(self, card: Rect, title: str, subtitle: str) -> None:
         self.texts.draw(
@@ -372,7 +402,9 @@ class LauncherInterface:
             bold=True,
         )
 
-    def _bounds(self, width: float, height: float, screen: str, server_count: int) -> dict[str, Rect]:
+    def _bounds(
+        self, width: float, height: float, screen: str, server_count: int, server_offset: int
+    ) -> dict[str, Rect]:
         card_width = min(870.0, max(700.0, width - 90.0))
         card_height = min(540.0, max(470.0, height - 155.0))
         card = Rect((width - card_width) / 2, 68, card_width, card_height)
@@ -397,17 +429,19 @@ class LauncherInterface:
         bounds["client_name"] = Rect(left, top - 145, 250, 44)
         bounds["client_host"] = Rect(left + 270, top - 145, 285, 44)
         bounds["client_port"] = Rect(left + 575, top - 145, card.right - (left + 575) - 34, 44)
-        bounds["connect"] = Rect(left, top - 210, 205, 40)
-        bounds["search"] = Rect(left + 225, top - 210, 225, 40)
+        bounds["connect"] = Rect(left, top - 210, 180, 40)
+        bounds["search"] = Rect(left + 194, top - 210, 220, 40)
+        bounds["join_selected"] = Rect(left + 428, top - 210, 270, 40)
         bounds["server_list"] = Rect(left, card.bottom + 84, card.width - 68, max(135, card.height - 325))
 
         list_rect = bounds["server_list"]
         row_height = 48
         row_top = list_rect.top - 52
-        for index in range(min(4, server_count)):
+        visible_indices = range(server_offset, min(server_count, server_offset + 4))
+        for visual_row, index in enumerate(visible_indices):
             bounds[f"server_{index}"] = Rect(
                 list_rect.left + 12,
-                row_top - (index + 1) * row_height,
+                row_top - (visual_row + 1) * row_height,
                 list_rect.width - 24,
                 row_height - 6,
             )
