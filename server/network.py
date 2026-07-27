@@ -6,6 +6,7 @@ import socket
 import threading
 import time
 import uuid
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -17,11 +18,15 @@ from common.constants import (
     MAP_SIZE,
     MAX_NAME_LENGTH,
     MAX_PLAYERS,
+    MIN_PLAYERS_TO_START,
     PLAYER_RADIUS,
     PLAYER_SPEED,
     PROTOCOL_VERSION,
     RECV_SIZE,
+    STATE_COUNTDOWN,
+    STATE_FINISHED,
     STATE_LOBBY,
+    STATE_PLAYING,
     TICK_RATE,
 )
 from common.protocol import (
@@ -71,15 +76,26 @@ class CTFServer:
         self.threads: list[threading.Thread] = []
         self._last_countdown_value: int | None = None
 
+        # Historial corto para mostrar eventos tanto en la terminal como en
+        # la ventana gráfica del servidor.
+        self._events: deque[str] = deque(maxlen=30)
+        self._events_lock = threading.Lock()
+
     def start(self) -> None:
         self._start_tcp_listener()
         self._start_udp_discovery()
         self._start_game_loop()
+        self.log_event(
+            f"[SERVIDOR] Listo para recibir jugadores en TCP {self.host}:{self.tcp_port}"
+        )
+        self.log_event(f"[DESCUBRIMIENTO] UDP activo en el puerto {DISCOVERY_PORT}")
+        self.log_event("[CONTROL] Presiona ESPACIO o el botón para iniciar la partida")
 
     def stop(self) -> None:
         if not self.running.is_set():
             return
 
+        self.log_event("[SERVIDOR] Cerrando conexiones...")
         self.running.clear()
 
         if self.tcp_socket is not None:
@@ -106,6 +122,36 @@ class CTFServer:
                 session.sock.close()
             except OSError:
                 pass
+
+    def log_event(self, message: str) -> None:
+        """Imprime un evento y lo guarda para mostrarlo en Arcade."""
+
+        timestamp = time.strftime("%H:%M:%S")
+        line = f"[{timestamp}] {message}"
+        print(line, flush=True)
+        with self._events_lock:
+            self._events.append(line)
+
+    def recent_events(self, limit: int = 6) -> list[str]:
+        with self._events_lock:
+            return list(self._events)[-max(1, limit) :]
+
+    def can_start_game(self) -> bool:
+        snapshot = self.game.public_snapshot()
+        return (
+            snapshot["phase"] == STATE_LOBBY
+            and len(snapshot["players"]) >= MIN_PLAYERS_TO_START
+        )
+
+    def start_game(self) -> tuple[bool, str]:
+        """Solicita el inicio manual de la partida desde el host."""
+
+        started, message = self.game.request_start()
+        if started:
+            self.log_event(f"[PARTIDA] {message}")
+        else:
+            self.log_event(f"[AVISO] No se pudo iniciar: {message}")
+        return started, message
 
     def _start_tcp_listener(self) -> None:
         self.tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -144,6 +190,10 @@ class CTFServer:
             except OSError:
                 break
 
+            self.log_event(
+                f"[CONEXIÓN] Nueva conexión entrante desde {address[0]}:{address[1]}"
+            )
+
             client_socket.settimeout(1.0)
             session = ClientSession(client_socket, address)
 
@@ -174,6 +224,9 @@ class CTFServer:
                 try:
                     messages = buffer.feed(data)
                 except ProtocolError as error:
+                    self.log_event(
+                        f"[PROTOCOLO] Mensaje inválido desde {session.address[0]}: {error}"
+                    )
                     self._safe_send(session, {"type": "error", "reason": str(error)})
                     if str(error) == "MESSAGE_TOO_LARGE":
                         break
@@ -229,6 +282,9 @@ class CTFServer:
 
         version = message.get("v")
         if version != PROTOCOL_VERSION:
+            self.log_event(
+                f"[RECHAZADO] {session.address[0]} usa una versión incompatible"
+            )
             self._safe_send(session, {"type": "error", "reason": "VERSION_MISMATCH"})
             self._close_session_socket(session)
             return
@@ -245,6 +301,9 @@ class CTFServer:
 
         with self.game.lock:
             if self.game.phase != STATE_LOBBY:
+                self.log_event(
+                    f"[RECHAZADO] '{name}' intentó entrar con la partida iniciada"
+                )
                 self._safe_send(session, {"type": "error", "reason": "GAME_STARTED"})
                 return
             if len(self.game.players) >= MAX_PLAYERS:
@@ -253,9 +312,14 @@ class CTFServer:
                 return
 
         player_id = uuid.uuid4().hex[:8]
-        self.game.add_player(player_id, name)
+        player = self.game.add_player(player_id, name)
         session.player_id = player_id
         session.joined = True
+
+        self.log_event(
+            f"[LOBBY] Jugador '{name}' se unió | id={player_id} | "
+            f"spawn=({player.x:.0f},{player.y:.0f})"
+        )
 
         welcome = {
             "type": "welcome",
@@ -270,7 +334,11 @@ class CTFServer:
             },
         }
         self._safe_send(session, welcome)
+        self.log_event(f"[PROTOCOLO] Mensaje 'welcome' enviado a '{name}'")
+
         self.broadcast(self.game.lobby_message())
+        player_count = len(self.game.public_snapshot()["players"])
+        self.log_event(f"[LOBBY] Lista actualizada: {player_count} jugador(es)")
 
     def _discovery_loop(self) -> None:
         assert self.udp_socket is not None
@@ -310,12 +378,13 @@ class CTFServer:
 
     def _game_loop(self) -> None:
         tick_interval = 1.0 / TICK_RATE
-        previous = time.monotonic()
+        previous_time = time.monotonic()
+        previous_phase = self.game.public_snapshot()["phase"]
 
         while self.running.is_set():
-            started = time.monotonic()
-            delta_time = min(started - previous, 0.1)
-            previous = started
+            tick_started = time.monotonic()
+            delta_time = min(tick_started - previous_time, 0.1)
+            previous_time = tick_started
 
             self.game.update(delta_time)
 
@@ -323,21 +392,35 @@ class CTFServer:
             if countdown is not None and countdown != self._last_countdown_value:
                 self._last_countdown_value = countdown
                 self.broadcast({"type": "countdown", "seconds": countdown})
+                self.log_event(f"[COUNTDOWN] La partida inicia en {countdown}")
             elif countdown is None:
                 self._last_countdown_value = None
 
             if self.game.consume_start_message():
                 self.broadcast({"type": "start"})
+                self.log_event("[PARTIDA] Inicio enviado a todos los clientes")
 
             winner = self.game.consume_game_over_message()
             if winner is not None:
                 self.broadcast({"type": "game_over", "winner": winner})
+                winner_name = self.game.player_name(winner) or winner
+                self.log_event(f"[FIN] Ganador: '{winner_name}' ({winner})")
 
             snapshot = self.game.public_snapshot()
-            if snapshot["phase"] in {"playing", "finished"}:
+            current_phase = snapshot["phase"]
+
+            if current_phase in {STATE_PLAYING, STATE_FINISHED}:
                 self.broadcast(self.game.state_message())
 
-            elapsed = time.monotonic() - started
+            # Al terminar una ronda, el servidor vuelve al lobby y permite
+            # que el host inicie manualmente la siguiente.
+            if previous_phase != current_phase and current_phase == STATE_LOBBY:
+                self.broadcast(self.game.lobby_message())
+                self.log_event("[LOBBY] Nueva ronda lista. Esperando al host")
+
+            previous_phase = current_phase
+
+            elapsed = time.monotonic() - tick_started
             time.sleep(max(0.0, tick_interval - elapsed))
 
     def broadcast(self, message: dict[str, Any]) -> None:
@@ -367,13 +450,27 @@ class CTFServer:
                 self.sessions.pop(session.sock, None)
                 removed = True
 
+        player_name = self.game.player_name(session.player_id)
         if session.player_id is not None:
             self.game.remove_player(session.player_id)
 
         self._close_session_socket(session)
 
         if removed:
-            self.broadcast(self.game.lobby_message())
+            if player_name is not None:
+                self.log_event(
+                    f"[DESCONEXIÓN] Jugador '{player_name}' salió "
+                    f"({session.address[0]}:{session.address[1]})"
+                )
+            else:
+                self.log_event(
+                    f"[DESCONEXIÓN] Cliente sin registrar salió "
+                    f"({session.address[0]}:{session.address[1]})"
+                )
+
+            phase = self.game.public_snapshot()["phase"]
+            if phase in {STATE_LOBBY, STATE_COUNTDOWN}:
+                self.broadcast(self.game.lobby_message())
 
     @staticmethod
     def _close_session_socket(session: ClientSession) -> None:

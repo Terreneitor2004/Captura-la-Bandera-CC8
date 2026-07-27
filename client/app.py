@@ -205,6 +205,15 @@ class ClientWindow(arcade.Window):
 
         elif message_type == "lobby":
             lobby_players = message.get("players", [])
+
+            # Al conectarse o al terminar una ronda, el mensaje lobby indica
+            # que debemos esperar a que el host inicie manualmente. Durante
+            # countdown/playing solo actualizamos la lista sin cambiar la fase.
+            if self.phase in {"connecting", "lobby", "finished"}:
+                self.phase = "lobby"
+                self.countdown = None
+                self.winner = None
+
             for player in lobby_players:
                 player_id = player.get("id")
                 if isinstance(player_id, str):

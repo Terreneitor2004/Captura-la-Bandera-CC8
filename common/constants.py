@@ -28,7 +28,6 @@ COUNTDOWN_SECONDS = 5
 # Para probar de inmediato con una sola computadora.
 # Para exigir al menos dos personas, cambia este valor a 2.
 MIN_PLAYERS_TO_START = 1
-LOBBY_WAIT_SECONDS = 3.0
 
 MAP_CENTER_X = MAP_SIZE / 2
 MAP_CENTER_Y = MAP_SIZE / 2

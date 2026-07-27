@@ -1,69 +1,70 @@
-# Captura la Bandera — Python + sockets + Arcade
+# Captura la Bandera — Python + Arcade
 
-Proyecto completo de prueba para ejecutar como servidor o cliente.
+Proyecto multijugador con:
 
-## 1. Instalar
+- TCP para la partida.
+- UDP `8888` para descubrir servidores.
+- Mensajes JSON UTF-8 separados por `\n` en TCP.
+- Servidor autoritativo.
+- Cliente gráfico con Arcade.
+- Inicio manual de la partida desde la ventana del servidor.
 
-```bash
+## Instalar
+
+```powershell
 python -m venv .venv
 .venv\Scripts\activate
 python -m pip install -r requirements.txt
 ```
 
-En Linux/macOS la activación es:
+## Ejecutar servidor
 
-```bash
-source .venv/bin/activate
-```
-
-## 2. Ejecutar el servidor
-
-```bash
+```powershell
 python main.py server
 ```
 
-## 3. Ejecutar un cliente
+Cuando un cliente se conecta, la terminal del servidor muestra eventos como:
 
-En otra terminal:
-
-```bash
-python main.py client --name Fabian
+```text
+[CONEXIÓN] Nueva conexión entrante...
+[LOBBY] Jugador 'Fabian' se unió...
+[PROTOCOLO] Mensaje 'welcome' enviado...
 ```
 
-El cliente busca el servidor mediante UDP. Para conectarse manualmente en la misma computadora:
+La ventana del servidor también muestra los últimos eventos.
 
-```bash
+### Iniciar la partida
+
+Cuando haya al menos un jugador conectado, el host puede:
+
+- Hacer clic en **INICIAR PARTIDA**.
+- Presionar la barra espaciadora.
+
+Después se envía el countdown de 5 segundos y comienza la partida para todos.
+
+## Ejecutar cliente local
+
+```powershell
 python main.py client --name Fabian --host 127.0.0.1 --port 8889 --no-discovery
 ```
 
-Puedes abrir más terminales y crear más clientes:
+## Ejecutar cliente con Radmin VPN
 
-```bash
-python main.py client --name Ana --host 127.0.0.1 --port 8889 --no-discovery
+Usa la IP de Radmin del amigo que ejecuta el servidor:
+
+```powershell
+python main.py client --name Fabian --host 26.X.X.X --port 8889 --no-discovery
 ```
 
-## Controles
+## Controles del cliente
 
-- WASD o flechas: mover.
-- E: tomar o robar la bandera.
-
-## Reglas implementadas
-
-- La bandera inicia en `(500, 500)`.
-- Los jugadores aparecen aleatoriamente fuera del círculo.
-- El servidor calcula todas las posiciones.
-- El cliente solo envía dirección e interacción.
-- La bandera se captura o roba a una distancia máxima de 40 unidades.
-- Gana quien tenga la bandera y salga completamente del círculo.
-- TCP usa JSON UTF-8 terminado en `\n`.
-- UDP 8888 se usa solo para descubrimiento.
+- `WASD` o flechas: movimiento.
+- `E`: tomar o robar la bandera.
 
 ## Pruebas
 
-```bash
+```powershell
 python -m unittest discover -s tests -v
 ```
 
-## Nota para pruebas rápidas
-
-`MIN_PLAYERS_TO_START` está en `1` para poder probar con un solo cliente. Está en `common/constants.py`. Cámbialo a `2` cuando quieras exigir dos jugadores.
+`MIN_PLAYERS_TO_START` está en `1` para permitir pruebas con un solo cliente. Puedes cambiarlo en `common/constants.py`.

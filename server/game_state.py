@@ -18,7 +18,6 @@ from common.constants import (
     MAP_CENTER_X,
     MAP_CENTER_Y,
     MAP_SIZE,
-    LOBBY_WAIT_SECONDS,
     MIN_PLAYERS_TO_START,
     PLAYER_RADIUS,
     PLAYER_SPEED,
@@ -56,15 +55,12 @@ class GameState:
         self.finished_at: float | None = None
         self.start_message_pending = False
         self.game_over_message_pending = False
-        self.lobby_ready_at: float | None = None
 
     def add_player(self, player_id: str, name: str) -> Player:
         with self.lock:
             x, y = self._random_spawn_outside_circle()
             player = Player(player_id=player_id, name=name, x=x, y=y)
             self.players[player_id] = player
-            if self.lobby_ready_at is None:
-                self.lobby_ready_at = time.monotonic() + LOBBY_WAIT_SECONDS
             return player
 
     def remove_player(self, player_id: str) -> None:
@@ -78,6 +74,35 @@ class GameState:
 
             if not self.players:
                 self._reset_to_lobby()
+
+    def request_start(self) -> tuple[bool, str]:
+        """Inicia manualmente la cuenta regresiva desde la ventana del servidor."""
+
+        with self.lock:
+            if self.phase != STATE_LOBBY:
+                return False, "La partida solo puede iniciarse desde el lobby"
+
+            if len(self.players) < MIN_PLAYERS_TO_START:
+                return (
+                    False,
+                    f"Se necesitan al menos {MIN_PLAYERS_TO_START} jugador(es)",
+                )
+
+            self.winner = None
+            self.flag_owner = None
+            self.flag_x = FLAG_START_X
+            self.flag_y = FLAG_START_Y
+            self.finished_at = None
+            self.countdown_end = time.monotonic() + COUNTDOWN_SECONDS
+            self.phase = STATE_COUNTDOWN
+            self.start_message_pending = False
+            self.game_over_message_pending = False
+
+            for player in self.players.values():
+                player.dir_x = 0
+                player.dir_y = 0
+
+            return True, f"Cuenta regresiva iniciada con {len(self.players)} jugador(es)"
 
     def set_direction(self, player_id: str, dir_x: int, dir_y: int) -> bool:
         with self.lock:
@@ -133,19 +158,14 @@ class GameState:
         with self.lock:
             now = time.monotonic()
 
+            # El servidor inicia manualmente la partida. En lobby no hay
+            # transición automática.
             if self.phase == STATE_LOBBY:
-                enough_players = len(self.players) >= MIN_PLAYERS_TO_START
-                wait_finished = self.lobby_ready_at is not None and now >= self.lobby_ready_at
-                if enough_players and wait_finished:
-                    self.phase = STATE_COUNTDOWN
-                    self.countdown_end = now + COUNTDOWN_SECONDS
+                return
 
-            elif self.phase == STATE_COUNTDOWN:
-                if len(self.players) < MIN_PLAYERS_TO_START:
-                    self.phase = STATE_LOBBY
-                    self.countdown_end = None
-                    self.lobby_ready_at = None
-                elif self.countdown_end is not None and now >= self.countdown_end:
+            if self.phase == STATE_COUNTDOWN:
+                # Si todos se desconectan, remove_player() ya vuelve al lobby.
+                if self.countdown_end is not None and now >= self.countdown_end:
                     self.phase = STATE_PLAYING
                     self.start_message_pending = True
                     self.countdown_end = None
@@ -228,6 +248,13 @@ class GameState:
                 ],
             }
 
+    def player_name(self, player_id: str | None) -> str | None:
+        if player_id is None:
+            return None
+        with self.lock:
+            player = self.players.get(player_id)
+            return player.name if player is not None else None
+
     def _move_players(self, delta_time: float) -> None:
         for player in self.players.values():
             dx = float(player.dir_x)
@@ -303,7 +330,6 @@ class GameState:
         self.countdown_end = None
         self.start_message_pending = False
         self.game_over_message_pending = False
-        self.lobby_ready_at = time.monotonic() + LOBBY_WAIT_SECONDS if self.players else None
 
         for player in self.players.values():
             player.x, player.y = self._random_spawn_outside_circle()
@@ -320,4 +346,3 @@ class GameState:
         self.finished_at = None
         self.start_message_pending = False
         self.game_over_message_pending = False
-        self.lobby_ready_at = None
