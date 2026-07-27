@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import queue
 import socket
+import subprocess
+import sys
 import threading
+from pathlib import Path
 from typing import Any, Callable
 
 import arcade
@@ -51,6 +54,7 @@ class LauncherWindow(arcade.Window):
         self.busy = False
         self.results: queue.Queue[tuple[str, Any]] = queue.Queue()
         self.elapsed = 0.0
+        self.child_process: subprocess.Popen[bytes] | None = None
 
     def on_draw(self) -> None:
         self.clear()
@@ -90,11 +94,12 @@ class LauncherWindow(arcade.Window):
                     else "No se encontraron servidores. Verifica Radmin, UDP 8888 y el firewall."
                 )
                 self.error = ""
-            elif kind == "server":
-                self._open_server(value)
+            elif kind == "client_target":
+                name, host, port = value
+                self._connect(name, host, port)
                 return
-            elif kind == "client":
-                self._open_client(value)
+            elif kind == "child_done":
+                self._return_after_child(int(value))
                 return
 
     def on_mouse_motion(self, x: float, y: float, dx: float, dy: float) -> None:
@@ -225,14 +230,18 @@ class LauncherWindow(arcade.Window):
             self.error = "El puerto TCP debe estar entre 1 y 65535."
             return
 
-        def job() -> Any:
-            from server.network import CTFServer
-
-            server = CTFServer("0.0.0.0", port, name)
-            server.start()
-            return server
-
-        self._async("server", "Iniciando servidor...", job)
+        self._launch_child(
+            [
+                "server",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                str(port),
+                "--name",
+                name,
+            ],
+            "Servidor",
+        )
 
     def _connect_from_form(self) -> None:
         name = self.fields["client_name"].value.strip()
@@ -259,15 +268,15 @@ class LauncherWindow(arcade.Window):
             self._connect(name, host, port)
             return
 
-        def resolve_and_connect() -> Any:
+        def resolve_target() -> tuple[str, str, int]:
             info = discover_server_at(host)
             if not info:
                 raise ConnectionError(
                     "El servidor no respondió por UDP 8888. Escribe su puerto TCP manualmente."
                 )
-            return self._build_client(name, host, int(info["tcp_port"]))
+            return name, host, int(info["tcp_port"])
 
-        self._async("client", f"Consultando {host}:8888...", resolve_and_connect)
+        self._async("client_target", f"Consultando {host}:8888...", resolve_target)
 
     def _search_servers(self) -> None:
         self.servers = []
@@ -299,23 +308,19 @@ class LauncherWindow(arcade.Window):
         self._connect(name, str(server["ip"]), int(server["tcp_port"]))
 
     def _connect(self, name: str, host: str, port: int) -> None:
-        self._async(
-            "client",
-            f"Conectando a {host}:{port}...",
-            lambda: self._build_client(name, host, port),
+        self._launch_child(
+            [
+                "client",
+                "--name",
+                name,
+                "--host",
+                host,
+                "--port",
+                str(port),
+                "--no-discovery",
+            ],
+            "Cliente",
         )
-
-    @staticmethod
-    def _build_client(name: str, host: str, port: int) -> Any:
-        from client.network import CTFClient
-
-        client = CTFClient(host, port, name)
-        try:
-            client.connect()
-        except Exception:
-            client.close()
-            raise
-        return client
 
     def _async(self, kind: str, status: str, function: Callable[[], Any]) -> None:
         self.busy = True
@@ -334,17 +339,51 @@ class LauncherWindow(arcade.Window):
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _open_server(self, server: Any) -> None:
-        from server.app import ServerWindow
+    def _launch_child(self, arguments: list[str], label: str) -> None:
+        """Ejecuta cliente o servidor en otro proceso para aislar Arcade/OpenGL."""
+        if self.child_process is not None and self.child_process.poll() is None:
+            self.error = "Ya hay una ventana del juego abierta."
+            return
 
-        ServerWindow(server)
-        self.close()
+        root = Path(__file__).resolve().parents[1]
+        command = [sys.executable, str(root / "main.py"), *arguments]
+        self.status = f"Abriendo {label.lower()}..."
+        self.error = ""
 
-    def _open_client(self, client: Any) -> None:
-        from client.app import ClientWindow
+        try:
+            self.child_process = subprocess.Popen(command, cwd=str(root))
+        except OSError as error:
+            self.child_process = None
+            self.error = f"No se pudo abrir {label.lower()}: {error}"
+            self.status = ""
+            return
 
-        ClientWindow(client)
-        self.close()
+        self.busy = True
+        self.set_visible(False)
+
+        def wait_for_child() -> None:
+            process = self.child_process
+            code = process.wait() if process is not None else 1
+            self.results.put(("child_done", code))
+
+        threading.Thread(target=wait_for_child, daemon=True).start()
+
+    def _return_after_child(self, return_code: int) -> None:
+        """Vuelve al menú cuando la ventana independiente termina."""
+        self.child_process = None
+        self.busy = False
+        self.set_visible(True)
+        self.switch_to()
+        self.activate()
+        if return_code == 0:
+            self.status = "La ventana del juego se cerró. Puedes elegir otra opción."
+            self.error = ""
+        else:
+            self.status = ""
+            self.error = (
+                "No fue posible mantener abierta la ventana. "
+                "Revisa el mensaje que apareció en PowerShell."
+            )
 
 
 def run_launcher() -> None:

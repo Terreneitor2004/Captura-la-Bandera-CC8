@@ -6,6 +6,8 @@ eventos de la ventana con las acciones del servidor.
 
 from __future__ import annotations
 
+from typing import Any
+
 import arcade
 
 from server.interface import ServerInterface, ServerUIState
@@ -18,7 +20,7 @@ WINDOW_TITLE = "CTF - Servidor Python"
 
 
 class ServerWindow(arcade.Window):
-    def __init__(self, server: CTFServer) -> None:
+    def __init__(self, server: CTFServer, launcher: Any | None = None) -> None:
         super().__init__(
             WINDOW_WIDTH,
             WINDOW_HEIGHT,
@@ -26,6 +28,7 @@ class ServerWindow(arcade.Window):
             resizable=True,
         )
         self.server = server
+        self.launcher = launcher
         self.interface = ServerInterface()
         self.feedback_message = "Esperando jugadores..."
         self.mouse_x = -1.0
@@ -81,7 +84,11 @@ class ServerWindow(arcade.Window):
 
     def on_close(self) -> None:
         self.server.stop()
+        launcher = self.launcher
+        self.launcher = None
         super().on_close()
+        if launcher is not None:
+            launcher.return_to_menu()
 
     def _try_start_game(self) -> None:
         started, message = self.server.start_game()

@@ -12,7 +12,7 @@ from typing import Any
 import arcade
 
 from client.interface import ClientInterface, ClientUIState
-from client.message_adapter import normalize_flag, normalize_players
+from client.message_adapter import merge_player_state, normalize_flag, normalize_players
 from client.network import CTFClient
 from ui import theme
 
@@ -22,7 +22,7 @@ WINDOW_TITLE = "CTF - Cliente Python"
 
 
 class ClientWindow(arcade.Window):
-    def __init__(self, client: CTFClient) -> None:
+    def __init__(self, client: CTFClient, launcher: Any | None = None) -> None:
         super().__init__(
             WINDOW_WIDTH,
             WINDOW_HEIGHT,
@@ -30,6 +30,7 @@ class ClientWindow(arcade.Window):
             resizable=True,
         )
         self.client = client
+        self.launcher = launcher
         self.interface = ClientInterface()
         arcade.set_background_color(theme.BACKGROUND)
 
@@ -101,7 +102,11 @@ class ClientWindow(arcade.Window):
 
     def on_close(self) -> None:
         self.client.close()
+        launcher = self.launcher
+        self.launcher = None
         super().on_close()
+        if launcher is not None:
+            launcher.return_to_menu()
 
     def _send_direction_if_changed(self) -> None:
         left = arcade.key.A in self.keys_down or arcade.key.LEFT in self.keys_down
@@ -169,7 +174,12 @@ class ClientWindow(arcade.Window):
             # de la clase envían players como diccionario indexado por ID y
             # flag.carrier_id. Normalizamos ambos formatos para interoperar.
             self.flag = normalize_flag(message.get("flag", self.flag), self.flag)
-            self.players = normalize_players(message.get("players", []))
+            # ``lobby`` contiene los nombres; ``state`` normalmente solo
+            # contiene id, x y y. Se mezclan los datos para conservar nombres.
+            self.players = merge_player_state(
+                message.get("players", []),
+                self.players,
+            )
 
             # Según el protocolo, un mensaje state solo se envía durante playing.
             # Esto también permite conectarse a servidores que omiten start.

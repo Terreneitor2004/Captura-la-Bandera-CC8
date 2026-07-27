@@ -57,13 +57,6 @@ Se abrirá un menú gráfico para elegir **Servidor** o **Cliente**. Desde ahí 
 
 La interfaz del inicio está separada en `launcher/app.py`, `launcher/interface.py` y `launcher/widgets.py`.
 
-
-## Buscar y elegir servidores activos
-
-En el menú de **Cliente**, presiona **BUSCAR / ACTUALIZAR**. El programa envía un broadcast UDP por el puerto `8888`, muestra los servidores que respondan y permite seleccionar uno antes de presionar **UNIRSE AL SELECCIONADO**.
-
-La búsqueda incluye la red local, Radmin VPN y localhost. Si aparecen más de cuatro servidores, usa la rueda del mouse sobre la lista. Consulta `BROADCAST_SERVIDORES.md` para ver el flujo y los requisitos de firewall.
-
 ## Ejecutar servidor
 
 ```powershell
