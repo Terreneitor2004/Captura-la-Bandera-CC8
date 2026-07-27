@@ -46,6 +46,17 @@ python -m venv .venv
 python -m pip install -r requirements.txt
 ```
 
+
+## Inicio con un solo comando
+
+```powershell
+python main.py
+```
+
+Se abrirá un menú gráfico para elegir **Servidor** o **Cliente**. Desde ahí puedes configurar el nombre, IP de Radmin, puerto TCP o buscar servidores por UDP `8888`.
+
+La interfaz del inicio está separada en `launcher/app.py`, `launcher/interface.py` y `launcher/widgets.py`.
+
 ## Ejecutar servidor
 
 ```powershell
