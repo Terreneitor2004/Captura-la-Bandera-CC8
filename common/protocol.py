@@ -1,6 +1,4 @@
-"""Codificación, envío y lectura de mensajes JSON del protocolo CTF."""
-
-from __future__ import annotations
+"""Mensajes JSON del protocolo CTF."""
 
 import json
 import socket
@@ -10,65 +8,52 @@ from common.constants import MAX_MESSAGE_SIZE
 
 
 class ProtocolError(Exception):
-    """Error producido por un mensaje que incumple el protocolo."""
+    pass
 
 
-def validate_basic_message(message: dict[str, Any]) -> None:
+def _validate(message: Any) -> dict[str, Any]:
     if not isinstance(message, dict):
         raise ProtocolError("INVALID_JSON")
-
     if "type" not in message:
         raise ProtocolError("MISSING_FIELD")
-
     if not isinstance(message["type"], str) or not message["type"].strip():
         raise ProtocolError("INVALID_FIELD")
+    return message
 
 
-def encode_tcp_message(message: dict[str, Any]) -> bytes:
-    validate_basic_message(message)
-
+def _encode(message: dict[str, Any], newline: bool = False) -> bytes:
+    _validate(message)
     try:
         text = json.dumps(message, ensure_ascii=False, separators=(",", ":"))
     except (TypeError, ValueError) as error:
         raise ProtocolError("INVALID_JSON") from error
-
-    encoded = (text + "\n").encode("utf-8")
-    if len(encoded) > MAX_MESSAGE_SIZE:
-        raise ProtocolError("MESSAGE_TOO_LARGE")
-    return encoded
-
-
-def encode_udp_message(message: dict[str, Any]) -> bytes:
-    validate_basic_message(message)
-
-    try:
-        encoded = json.dumps(
-            message,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    except (TypeError, ValueError) as error:
-        raise ProtocolError("INVALID_JSON") from error
-
-    if len(encoded) > MAX_MESSAGE_SIZE:
-        raise ProtocolError("MESSAGE_TOO_LARGE")
-    return encoded
-
-
-def decode_udp_message(data: bytes) -> dict[str, Any]:
+    data = (text + ("\n" if newline else "")).encode("utf-8")
     if len(data) > MAX_MESSAGE_SIZE:
         raise ProtocolError("MESSAGE_TOO_LARGE")
+    return data
 
+
+def _decode(data: bytes) -> dict[str, Any]:
+    if len(data) > MAX_MESSAGE_SIZE:
+        raise ProtocolError("MESSAGE_TOO_LARGE")
     try:
-        text = data.decode("utf-8")
-        message = json.loads(text)
+        return _validate(json.loads(data.decode("utf-8")))
     except UnicodeDecodeError as error:
         raise ProtocolError("INVALID_UTF8") from error
     except json.JSONDecodeError as error:
         raise ProtocolError("INVALID_JSON") from error
 
-    validate_basic_message(message)
-    return message
+
+def encode_tcp_message(message: dict[str, Any]) -> bytes:
+    return _encode(message, newline=True)
+
+
+def encode_udp_message(message: dict[str, Any]) -> bytes:
+    return _encode(message)
+
+
+def decode_udp_message(data: bytes) -> dict[str, Any]:
+    return _decode(data)
 
 
 def send_tcp_message(sock: socket.socket, message: dict[str, Any]) -> None:
@@ -84,7 +69,7 @@ def send_udp_message(
 
 
 class JsonLineBuffer:
-    """Reconstruye mensajes TCP separados por saltos de línea."""
+    """Une fragmentos TCP y extrae cada JSON terminado en ``\n``."""
 
     def __init__(self) -> None:
         self._buffer = bytearray()
@@ -92,33 +77,21 @@ class JsonLineBuffer:
     def feed(self, data: bytes) -> list[dict[str, Any]]:
         if not isinstance(data, bytes):
             raise TypeError("data debe ser bytes")
-
         self._buffer.extend(data)
-        messages: list[dict[str, Any]] = []
+        messages = []
 
-        while b"\n" in self._buffer:
-            line, _, remaining = self._buffer.partition(b"\n")
-            self._buffer = bytearray(remaining)
-
+        while True:
+            position = self._buffer.find(b"\n")
+            if position < 0:
+                break
+            line = bytes(self._buffer[:position])
+            del self._buffer[: position + 1]
             if not line:
                 raise ProtocolError("INVALID_JSON")
-            if len(line) > MAX_MESSAGE_SIZE:
-                raise ProtocolError("MESSAGE_TOO_LARGE")
-
-            try:
-                text = line.decode("utf-8")
-                message = json.loads(text)
-            except UnicodeDecodeError as error:
-                raise ProtocolError("INVALID_UTF8") from error
-            except json.JSONDecodeError as error:
-                raise ProtocolError("INVALID_JSON") from error
-
-            validate_basic_message(message)
-            messages.append(message)
+            messages.append(_decode(line))
 
         if len(self._buffer) > MAX_MESSAGE_SIZE:
             raise ProtocolError("MESSAGE_TOO_LARGE")
-
         return messages
 
     @property

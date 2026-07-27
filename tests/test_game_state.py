@@ -92,5 +92,19 @@ class GameStateTests(unittest.TestCase):
         self.assertAlmostEqual(distance, PLAYER_SPEED * 0.05)
 
 
+    def test_repeated_interact_is_safe_noop(self) -> None:
+        """Pulsar E dos veces no cambia el estado tras la primera captura."""
+        game = GameState()
+        player = game.add_player("p1", "Jugador")
+        game.phase = STATE_PLAYING
+        player.x, player.y = FLAG_START_X, FLAG_START_Y
+
+        self.assertTrue(game.interact("p1"))
+        self.assertEqual(game.flag_owner, "p1")
+        self.assertFalse(game.interact("p1"))
+        self.assertEqual(game.flag_owner, "p1")
+
+
 if __name__ == "__main__":
     unittest.main()
+

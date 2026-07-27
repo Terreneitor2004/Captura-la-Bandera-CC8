@@ -6,6 +6,7 @@ centrado en eventos, entrada del teclado y mensajes del protocolo.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import arcade
@@ -43,6 +44,7 @@ class ClientWindow(arcade.Window):
 
         self.keys_down: set[int] = set()
         self.last_direction = (0, 0)
+        self.last_interact_at = 0.0
 
     def on_update(self, delta_time: float) -> None:
         del delta_time
@@ -71,6 +73,12 @@ class ClientWindow(arcade.Window):
         self.keys_down.add(symbol)
 
         if symbol == arcade.key.E:
+            # Evita que la repetición del teclado envíe varias interacciones.
+            # También evita mandar interact durante lobby/countdown.
+            now = time.monotonic()
+            if self.phase != "playing" or now - self.last_interact_at < 0.25:
+                return
+            self.last_interact_at = now
             try:
                 self.client.interact()
             except OSError as error:
