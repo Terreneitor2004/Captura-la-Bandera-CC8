@@ -27,7 +27,7 @@ class ClientWindow(arcade.Window):
         self.countdown: int | None = None
         self.winner: str | None = None
         self.error_message = ""
-        self.config: dict[str, Any] = {}
+        self.game_config: dict[str, Any] = {}
 
         self.keys_down: set[int] = set()
         self.last_direction = (0, 0)
@@ -42,8 +42,8 @@ class ClientWindow(arcade.Window):
         width = self.width
         height = self.height
 
-        circle_radius_logical = float(self.config.get("circle_radius", CIRCLE_RADIUS))
-        player_radius_logical = float(self.config.get("player_radius", PLAYER_RADIUS))
+        circle_radius_logical = float(self.game_config.get("circle_radius", CIRCLE_RADIUS))
+        player_radius_logical = float(self.game_config.get("player_radius", PLAYER_RADIUS))
 
         center_x, center_y = logical_to_screen(
             MAP_CENTER_X,
@@ -199,7 +199,7 @@ class ClientWindow(arcade.Window):
 
         if message_type == "welcome":
             self.player_id = message.get("player_id")
-            self.config = message.get("config", {})
+            self.game_config = message.get("config", {})
             self.phase = "lobby"
             self.error_message = ""
 
