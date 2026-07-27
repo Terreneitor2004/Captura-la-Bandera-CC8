@@ -39,7 +39,7 @@ def _decode(data: bytes) -> dict[str, Any]:
     try:
         return _validate(json.loads(data.decode("utf-8")))
     except UnicodeDecodeError as error:
-        raise ProtocolError("INVALID_UTF8") from error
+        raise ProtocolError("INVALID_JSON") from error
     except json.JSONDecodeError as error:
         raise ProtocolError("INVALID_JSON") from error
 

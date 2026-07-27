@@ -17,7 +17,7 @@ def discover_servers(timeout: float = 1.5) -> list[dict[str, Any]]:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.settimeout(0.2)
 
-        for ip in ("255.255.255.255", "127.0.0.1"):
+        for ip in ("255.255.255.255", "26.255.255.255", "127.0.0.1"):
             try:
                 send_udp_message(sock, request, (ip, DISCOVERY_PORT))
             except OSError:

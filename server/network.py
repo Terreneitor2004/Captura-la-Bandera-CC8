@@ -190,7 +190,7 @@ class CTFServer:
 
     def _join(self, session: ClientSession, message: dict[str, Any]) -> None:
         if session.joined:
-            self._error(session, "ALREADY_JOINED")
+            self._error(session, "INVALID_PHASE")
             return
         if message.get("v") != C.PROTOCOL_VERSION:
             self._error(session, "VERSION_MISMATCH")
@@ -205,7 +205,7 @@ class CTFServer:
 
         with self.game.lock:
             if self.game.phase != C.STATE_LOBBY:
-                self._error(session, "GAME_STARTED")
+                self._error(session, "INVALID_PHASE")
                 return
             if len(self.game.players) >= C.MAX_PLAYERS:
                 self._error(session, "LOBBY_FULL")
@@ -245,19 +245,50 @@ class CTFServer:
                 continue
 
             if message.get("type") == "discover" and message.get("v") == C.PROTOCOL_VERSION:
-                snapshot = self.game.public_snapshot()
-                response = {
-                    "type": "server_info",
-                    "v": C.PROTOCOL_VERSION,
-                    "name": self.name,
-                    "tcp_port": self.tcp_port,
-                    "state": snapshot["phase"],
-                    "players": len(snapshot["players"]),
-                }
                 try:
-                    send_udp_message(self.udp_socket, response, address)
+                    send_udp_message(self.udp_socket, self._server_info_message(), address)
                 except OSError:
                     pass
+
+    def _server_info_message(self) -> dict[str, Any]:
+        snapshot = self.game.public_snapshot()
+        # CTF v1 solo permite "lobby" o "playing" en server_info.
+        state = C.STATE_LOBBY if snapshot["phase"] == C.STATE_LOBBY else C.STATE_PLAYING
+        return {
+            "type": "server_info",
+            "v": C.PROTOCOL_VERSION,
+            "name": self.name,
+            "tcp_port": self.tcp_port,
+            "state": state,
+            "players": len(snapshot["players"]),
+        }
+
+    def _publish_protocol_messages(self, previous_phase: str) -> str:
+        countdown = self.game.countdown_seconds()
+        if countdown != self.last_countdown:
+            self.last_countdown = countdown
+            if countdown is not None:
+                self.broadcast({"type": "countdown", "seconds": countdown})
+                self.log_event(f"[COUNTDOWN] La partida inicia en {countdown}")
+
+        if self.game.consume_start_message():
+            self.broadcast({"type": "start"})
+            self.log_event("[PARTIDA] Inicio enviado a los clientes")
+
+        winner = self.game.consume_game_over_message()
+        if winner:
+            self.broadcast({"type": "game_over", "winner": winner})
+            self.log_event(f"[FIN] Ganador: '{self.game.player_name(winner) or winner}'")
+
+        phase = self.game.phase
+        # state pertenece únicamente a la fase playing. Después de game_over
+        # no debe enviarse otro state, porque la sesión ya está finalizada.
+        if phase == C.STATE_PLAYING:
+            self.broadcast(self.game.state_message())
+        if phase == C.STATE_LOBBY and phase != previous_phase:
+            self.broadcast(self.game.lobby_message())
+            self.log_event("[LOBBY] Nueva ronda lista")
+        return phase
 
     def _game_loop(self) -> None:
         interval = 1 / C.TICK_RATE
@@ -268,30 +299,7 @@ class CTFServer:
             started = time.monotonic()
             self.game.update(min(started - previous, 0.1))
             previous = started
-
-            countdown = self.game.countdown_seconds()
-            if countdown != self.last_countdown:
-                self.last_countdown = countdown
-                if countdown is not None:
-                    self.broadcast({"type": "countdown", "seconds": countdown})
-                    self.log_event(f"[COUNTDOWN] La partida inicia en {countdown}")
-
-            if self.game.consume_start_message():
-                self.broadcast({"type": "start"})
-                self.log_event("[PARTIDA] Inicio enviado a los clientes")
-
-            winner = self.game.consume_game_over_message()
-            if winner:
-                self.broadcast({"type": "game_over", "winner": winner})
-                self.log_event(f"[FIN] Ganador: '{self.game.player_name(winner) or winner}'")
-
-            phase = self.game.phase
-            if phase in {C.STATE_PLAYING, C.STATE_FINISHED}:
-                self.broadcast(self.game.state_message())
-            if phase == C.STATE_LOBBY and phase != previous_phase:
-                self.broadcast(self.game.lobby_message())
-                self.log_event("[LOBBY] Nueva ronda lista")
-            previous_phase = phase
+            previous_phase = self._publish_protocol_messages(previous_phase)
             time.sleep(max(0, interval - (time.monotonic() - started)))
 
     def broadcast(self, message: dict[str, Any]) -> None:
